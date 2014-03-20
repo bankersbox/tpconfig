@@ -1,5 +1,16 @@
 #!/usr/bin/perl -s
 
+
+%setting = map {(split(/\s*=\s*/, $_, 2))[0..1]} grep !/^#/, split(/\s*[\r\n]+\s*/, {"default", split(/^\s*\[(.*)\]+[\s\r\n]*$/m, load_file("settings.txt"))}->{default});
+
+if ($settings)
+{
+    use Data::Dumper;
+    print Dumper(\%setting);
+    exit;
+}
+
+
 if ($show)
 {
     my %inventory = load_inventory();
@@ -30,120 +41,145 @@ if ($generate)
 
 if ($init)
 {
-    my %inventory = load_inventory();
-
-    save_file("data/cookie/");
-
-  SERVER:
-    #for my $server (qw(192.168.1.1 192.168.0.100 192.168.6.51))
-    for my $server (qw(192.168.6.51))
+    for (;;)
     {
-	die if $server !~ /^(?:\d+\.)+\d+$/;
+	my %inventory = load_inventory();
 
-	print "$server\n";
+	save_file("data/cookie/");
 
-	my $stok = load_file("data/stok/$server");
-	my($response);
-
-	for my $pass (1..2)
+      SERVER:
+	#for my $server (qw(192.168.1.1 192.168.0.100 192.168.6.51))
+	for my $server (split " ", $setting{factory_ips})
 	{
-	    if ($stok)
+	    die if $server !~ /^(?:\d+\.)+\d+$/;
+
+	    print STDERR "LOOKING FOR SERVER $server...";
+
+	    my $stok = load_file("data/stok/$server");
+	    my($response);
+
+	    for my $pass (1..2)
 	    {
-		# assume logged in, and try the request
-		my $curl = qq[curl -s --connect-timeout 3 -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/network/iface_status/lan'];
-		print "$curl\n";
+		if ($stok)
+		{
+		    # assume logged in, and try the request
+		    my $curl = qq[curl -s --connect-timeout 3 -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/network/iface_status/lan'];
+		    print STDERR "$curl\n" if $verbose;
+		    $response = qx[$curl];
+		    if (!length($response))
+		    {
+			print STDERR "NO SERVER";
+			next SERVER;
+		    }
+		    last if $response !~ /name="password"/;
+		}
+
+		last if $pass == 2;
+
+		# if not logged in (e.g., received a login form), log in
+		my $curl = qq[curl -s --connect-timeout 3 -c data/cookie/$server $server/cgi-bin/luci -d username=root -d 'password=$setting{default_password}'];
+		print STDERR "$curl\n" if $verbose;
 		$response = qx[$curl];
+		($stok) = $response =~ /<a href="\/cgi-bin\/luci\/;stok=(\w+)\/admin\/system\/">System<\/a>/;
+		save_file("data/stok/$server", $stok);
+
 		if (!length($response))
 		{
-		    print "NO SERVER\n";
-		    last SERVER;
+		    print STDERR "NO SERVER";
+		    next SERVER;
 		}
-		last if $response !~ /name="password"/;
-	    }
 
-	    last if $pass == 2;
-
-	    # if not logged in (e.g., received a login form), log in
-	    my $curl = qq[curl -s --connect-timeout 3 -c data/cookie/$server $server/cgi-bin/luci -d username=root -d password=1234];
-	    print "$curl\n";
-	    $response = qx[$curl];
-	    ($stok) = $response =~ /<a href="\/cgi-bin\/luci\/;stok=(\w+)\/admin\/system\/">System<\/a>/;
-	    save_file("data/stok/$server", $stok);
-
-	    if ($response =~ /name="password"/)
-	    {
-		print "NO ACCESS\n";
-		last SERVER;
-	    }
-	}
-
-	save_file("data/work1.html", $response);
-	my($mac) = $response =~ /"macaddr":\s*"(.*?)"/;
-	print "stok = $stok  mac = $mac\n";
-
-	if ($mac)
-	{
-	    my($ip);
-	    for my $ip0 (keys %inventory)
-	    {
-		if ($inventory{$ip0}{mac} eq $mac)
+		if ($response =~ /name="password"/)
 		{
-		    $ip = $ip0;
-		    last;
+		    print STDERR "NO ACCESS";
+		    next SERVER;
 		}
-		$ip = $ip0 if !$ip && !$inventory{$ip0}{mac};
 	    }
 
-	    die if $inventory{ip}{mac} && $inventory{ip}{mac} ne $mac;
+	    save_file("data/work1.html", $response);
+	    my($mac) = $response =~ /"macaddr":\s*"(.*?)"/;
+	    print STDERR "...stok = $stok  mac = $mac" if $verbose;
 
-	    if (!$inventory{$ip}{mac})
+	    if (!length($mac))
 	    {
-		$inventory{$ip}{mac} = $mac;
-		save_inventory(\%inventory);
+		print STDERR "NO MAC";
 	    }
-	    print "$server -> $ip\n";
-
-
-	    # SET PASSWORD AND SSH KEY
-	    my(@curl);
-	    my @F = (
-		"cbi.submit" => "1",
-		"cbid.system._pass.pw1" => "1234",
-		"cbid.system._pass.pw2" => "1234",
-		"cbid.dropbear._keys._data" => load_file("../../.ssh/id_rsa.pub"),
-		"cbi.apply" => "Save & Apply",
-		);
-	    for (my $i = 0; $i < @F; $i += 2)
+	    else
 	    {
-		push @curl, "-F", "'$F[$i]=$F[$i + 1]'";
-	    }
-	    my $curl = qq[curl -s -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/system/admin/' @curl];
-	    #print "$curl\n";
-	    my $response = qx[$curl];
-	    save_file("data/work2.html", $response);
+		my($ip);
+		for my $ip0 (keys %inventory)
+		{
+		    if ($inventory{$ip0}{mac} eq $mac)
+		    {
+			$ip = $ip0;
+			last;
+		    }
+		    $ip = $ip0 if !$ip && !$inventory{$ip0}{mac};
+		}
+
+		die if $inventory{ip}{mac} && $inventory{ip}{mac} ne $mac;
+
+		if (!$inventory{$ip}{mac})
+		{
+		    $inventory{$ip}{mac} = $mac;
+		    save_inventory(\%inventory);
+		}
+		print STDERR " -> $ip...";
 
 
-	    # SSH
-	    (my $gateway = $ip) =~ s/\d+$/1/;
-	    (my $broadcast = $ip) =~ s/\d+$/255/;
-	    my $dox = "
-ls -l /
-";
-	    my $do = "
-uci set network.lan.netmask=255.255.255.0
+		# SET PASSWORD AND SSH KEY
+		my(@curl);
+		my @F = (
+		    "cbi.submit" => "1",
+		    "cbid.system._pass.pw1" => $setting{default_password},
+		    "cbid.system._pass.pw2" => $setting{default_password},
+		    "cbid.dropbear._keys._data" => load_file("../../.ssh/id_rsa.pub"),
+		    "cbi.apply" => "Save & Apply",
+		    );
+		for (my $i = 0; $i < @F; $i += 2)
+		{
+		    push @curl, "-F", "'$F[$i]=$F[$i + 1]'";
+		}
+		my $curl = qq[curl -s -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/system/admin/' @curl];
+		print STDERR "\n$curl\n" if $verbose;
+		my $response = qx[$curl];
+		save_file("data/work2.html", $response);
+
+
+		# CONFIG BY SSH
+
+		my $do = "
+uci set network.lan.netmask=$setting{netmask}
 uci set network.lan.ipaddr=$ip
-uci set network.lan.gateway=$gateway
-uci set network.lan.broadcast=$broadcast
-uci set network.lan.dns=8.8.8.8
+uci set network.lan.gateway=$setting{gateway}
+uci set network.lan.broadcast=$setting{broadcast}
+uci set network.lan.dns=$setting{dns}
 uci commit
 reboot
 ";
-	    print $do2;
-	    my $response = qx[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
-	    print $response;
-	    print "REBOOTING to $ip\n";
+
+		my $response = qx[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
+		print STDERR "REBOOTING\n";
+	    }
 	}
+	continue
+	{
+	    if ($loop)
+	    {
+		sleep 1;
+		print STDERR "\r\033[K";
+	    }
+	    else
+	    {
+		print STDERR "\n";
+	    }
+	}
+
+	last if !$loop;
+	sleep 3;
     }
+
+    exit;
 }
 
 
