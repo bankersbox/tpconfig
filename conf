@@ -107,14 +107,14 @@ if ($init)
 	    else
 	    {
 		my($ip);
-		for my $ip0 (keys %inventory)
+		for my $ip0 (sort keys %inventory)
 		{
 		    if ($inventory{$ip0}{mac} eq $mac)
 		    {
 			$ip = $ip0;
 			last;
 		    }
-		    $ip = $ip0 if !$ip && !$inventory{$ip0}{mac};
+		    $ip = $ip0 if !length($ip) && !length($inventory{$ip0}{mac});
 		}
 
 		die if $inventory{ip}{mac} && $inventory{ip}{mac} ne $mac;
