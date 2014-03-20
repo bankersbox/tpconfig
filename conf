@@ -1,0 +1,191 @@
+#!/usr/bin/perl -s
+
+if ($show)
+{
+    my %inventory = load_inventory();
+    use Data::Dumper;
+    print Dumper(\%inventory);
+    exit;
+}
+
+
+if ($generate)
+{
+    die "usage: $0 -generate IP COUNT" if @ARGV != 2;
+    my($ip, $count) = @ARGV;
+
+    my %inventory = load_inventory();
+
+    for (my $i = 0; $i < $count; $i++)
+    {
+	$ip =~ s/(\d+)$/@{[$1 + 1]}/ while exists $inventory{$ip};
+	my $password = 10000000 + int rand 90000000;
+	$inventory{$ip} = {ip => $ip, password => $password};
+    }
+
+    save_inventory(\%inventory);
+    exit;
+}
+
+
+if ($init)
+{
+    my %inventory = load_inventory();
+
+    save_file("data/cookie/");
+
+    #for my $server (qw(192.168.1.1 192.168.0.100 192.168.6.51))
+    for my $server (qw(192.168.6.51))
+    {
+	die if $server !~ /^(?:\d+\.)+\d+$/;
+
+	print "$server\n";
+
+	my $stok = load_file("data/stok/$server");
+	print "stok = $stok\n";
+	my($response);
+
+	for my $pass (1..2)
+	{
+	    if ($stok)
+	    {
+		# assume logged in, and try the request
+		my $curl = qq[curl -s --connect-timeout 3 -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/network/iface_status/lan'];
+		print "$curl\n";
+		$response = qx[$curl];
+	    }
+
+	    last if $pass == 2 || $response =~ /<strong>MAC-Address:<\/strong>/;
+
+	    # if not logged in (e.g., received a login form), log in
+	    my $curl = qq[curl -s --connect-timeout 3 -c data/cookie/$server $server/cgi-bin/luci -d username=root -d password=1234];
+	    print "$curl\n";
+	    $response = qx[$curl];
+	    #print $response;
+	    ($stok) = $response =~ /<a href="\/cgi-bin\/luci\/;stok=(\w+)\/admin\/system\/">System<\/a>/;
+	    print "stok = $stok\n";
+	    save_file("data/stok/$server", $stok);
+	}
+
+	save_file("data/work1.html", $response);
+	my($mac) = $response =~ /"macaddr":\s*"(.*?)"/;
+	print "stok = $stok  mac = $mac\n";
+	if ($mac)
+	{
+	    my($ip);
+	    for my $ip0 (keys %inventory)
+	    {
+		if ($inventory{$ip0}{mac} eq $mac)
+		{
+		    $ip = $ip0;
+		    last;
+		}
+		$ip = $ip0 if !$ip && !$inventory{$ip0}{mac};
+	    }
+
+	    die if $inventory{ip}{mac} && $inventory{ip}{mac} ne $mac;
+
+	    if (!$inventory{$ip}{mac})
+	    {
+		$inventory{$ip}{mac} = $mac;
+		save_inventory(\%inventory);
+	    }
+	    print "$server -> $ip\n";
+
+
+	    # SET PASSWORD AND SSH KEY
+	    my(@curl);
+	    my @F = (
+		"cbi.submit" => "1",
+		"cbid.system._pass.pw1" => "1234",
+		"cbid.system._pass.pw2" => "1234",
+		"cbid.dropbear._keys._data" => load_file("../../.ssh/id_rsa.pub"),
+		"cbi.apply" => "Save & Apply",
+		);
+	    for (my $i = 0; $i < @F; $i += 2)
+	    {
+		push @curl, "-F", "'$F[$i]=$F[$i + 1]'";
+	    }
+	    my $curl = qq[curl -s -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/system/admin/' @curl];
+	    print "$curl\n";
+	    my $response = qx[$curl];
+	    save_file("data/work2.html", $response);
+
+
+	    # SSH
+	    my $response = qx[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n 'pwd; ls /'];
+	    print $response
+	}
+    }
+}
+
+
+sub save_inventory
+{
+    my($ref) = @_;
+    my(@inventory);
+    for (values %$ref)
+    {
+	push @inventory, join("\t", @$_{qw(ip password mac)});
+    }
+    save_file("inventory.txt", join("\n", sort(@inventory), undef));
+}
+
+sub load_inventory
+{
+    my(%inventory);
+
+    for (split(/\n/, load_file("inventory.txt")))
+    {
+	my @cell = split(/\t/);
+	$inventory{$cell[0]} = {ip => $cell[0], password => $cell[1], mac => $cell[2]};
+    }
+    return %inventory;
+}
+
+
+### BOILERPLATE ###
+
+
+sub load_file
+{
+    my $fn = shift;
+    if (open(my $in, $fn))
+    {
+	local $/ = wantarray? $/: undef;
+	<$in>;
+    }
+}
+
+sub load_pipe
+{
+    if (open(my $in, "-|", @_))
+    {
+	local $/ = wantarray? $/: undef;
+	<$in>;
+    }
+}
+
+sub save_file
+{
+    my $fn = shift;
+    if ($fn =~ /^\s*[\>\|]/)
+    {
+	if (open(my $out, $fn))
+	{
+	    print $out @_;
+	}
+    }
+    elsif ($fn !~ /\/$/ && open(my $out, ">", $fn))
+    {
+	print $out @_;
+    }
+    elsif ((my @path = split(/\//, $fn, -1)))
+    {
+	mkdir join("/", @path[0..$_]) for 0..$#path - 1;
+	if ($path[$#path] && open(my $out, ">", $fn))
+	{
+	    print $out @_;
+	}
+    }
+}
