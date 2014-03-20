@@ -34,6 +34,7 @@ if ($init)
 
     save_file("data/cookie/");
 
+  SERVER:
     #for my $server (qw(192.168.1.1 192.168.0.100 192.168.6.51))
     for my $server (qw(192.168.6.51))
     {
@@ -42,7 +43,6 @@ if ($init)
 	print "$server\n";
 
 	my $stok = load_file("data/stok/$server");
-	print "stok = $stok\n";
 	my($response);
 
 	for my $pass (1..2)
@@ -53,23 +53,34 @@ if ($init)
 		my $curl = qq[curl -s --connect-timeout 3 -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/network/iface_status/lan'];
 		print "$curl\n";
 		$response = qx[$curl];
+		if (!length($response))
+		{
+		    print "NO SERVER\n";
+		    last SERVER;
+		}
+		last if $response !~ /name="password"/;
 	    }
 
-	    last if $pass == 2 || $response =~ /<strong>MAC-Address:<\/strong>/;
+	    last if $pass == 2;
 
 	    # if not logged in (e.g., received a login form), log in
 	    my $curl = qq[curl -s --connect-timeout 3 -c data/cookie/$server $server/cgi-bin/luci -d username=root -d password=1234];
 	    print "$curl\n";
 	    $response = qx[$curl];
-	    #print $response;
 	    ($stok) = $response =~ /<a href="\/cgi-bin\/luci\/;stok=(\w+)\/admin\/system\/">System<\/a>/;
-	    print "stok = $stok\n";
 	    save_file("data/stok/$server", $stok);
+
+	    if ($response =~ /name="password"/)
+	    {
+		print "NO ACCESS\n";
+		last SERVER;
+	    }
 	}
 
 	save_file("data/work1.html", $response);
 	my($mac) = $response =~ /"macaddr":\s*"(.*?)"/;
 	print "stok = $stok  mac = $mac\n";
+
 	if ($mac)
 	{
 	    my($ip);
@@ -107,14 +118,30 @@ if ($init)
 		push @curl, "-F", "'$F[$i]=$F[$i + 1]'";
 	    }
 	    my $curl = qq[curl -s -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/system/admin/' @curl];
-	    print "$curl\n";
+	    #print "$curl\n";
 	    my $response = qx[$curl];
 	    save_file("data/work2.html", $response);
 
 
 	    # SSH
-	    my $response = qx[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n 'pwd; ls /'];
-	    print $response
+	    (my $gateway = $ip) =~ s/\d+$/1/;
+	    (my $broadcast = $ip) =~ s/\d+$/255/;
+	    my $dox = "
+ls -l /
+";
+	    my $do = "
+uci set network.lan.netmask=255.255.255.0
+uci set network.lan.ipaddr=$ip
+uci set network.lan.gateway=$gateway
+uci set network.lan.broadcast=$broadcast
+uci set network.lan.dns=8.8.8.8
+uci commit
+reboot
+";
+	    print $do2;
+	    my $response = qx[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
+	    print $response;
+	    print "REBOOTING to $ip\n";
 	}
     }
 }
