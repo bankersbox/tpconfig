@@ -1,6 +1,6 @@
 
 # a list of ip addresses to check
-factory_ips = 192.168.6.51
+factory_ips = 192.168.0.100
 default_password = 1234
 
 netmask = 255.255.255.0

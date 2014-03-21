@@ -158,7 +158,9 @@ uci commit
 reboot
 ";
 
-		my $response = qx[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
+		my $ssh = qq[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
+		print "$ssh\n" if $verbose;
+		my $response = qx[$ssh];
 		print STDERR "REBOOTING\n";
 	    }
 	}
