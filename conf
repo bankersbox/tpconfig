@@ -39,6 +39,68 @@ if ($generate)
 }
 
 
+if ($flash)
+{
+    for (;;)
+    {
+	my %inventory = load_inventory();
+
+      FACTORY:
+	for my $server (split " ", $setting{factory_ips})
+	{
+	    die if $server !~ /^(?:\d+\.)+\d+$/;
+
+	    print STDERR "LOOKING FOR FACTORY SERVER $server...";
+
+	    my $curl = qq[curl -s --connect-timeout 3 '$server'];
+	    print STDERR "$curl\n" if $verbose;
+	    my $response = qx[$curl];
+
+	    if (!length($response))
+	    {
+		print STDERR "NO SERVER";
+		next FACTORY;
+	    }
+
+	    if ($response !~ /"\.\.\/login\/images\/loginLOGO\.png"/)
+	    {
+		print STDERR "WRONG RESPONSE";
+		next FACTORY;
+	    }
+
+	    save_file("data/work1.html", $response);
+
+	    my $step1 = qq[curl -s --user admin:admin --cookie subType=pcSub -F filename=\@sysupgrade.bin 192.168.1.1/incoming/Firmware.htm];
+	    my $step2 = qq[curl -s --user admin:admin --cookie subType=pcSub 192.168.1.1/userRpm/FirmwareUpdateTemp.htm];
+
+	    print STDERR "STEP 1...";
+	    qx[$step1];
+	    print STDERR "STEP 2...";
+	    qx[$step2];
+
+	    print STDERR "DONE\n";
+	}
+	continue
+	{
+	    if ($loop)
+	    {
+		sleep 1;
+		print STDERR "\r\033[K";
+	    }
+	    else
+	    {
+		print STDERR "\n";
+	    }
+	}
+
+	last if !$loop;
+	sleep 1;
+    }
+
+    exit;
+}
+
+
 if ($init)
 {
     for (;;)
@@ -47,13 +109,12 @@ if ($init)
 
 	save_file("data/cookie/");
 
-      SERVER:
-	#for my $server (qw(192.168.1.1 192.168.0.100 192.168.6.51))
-	for my $server (split " ", $setting{factory_ips})
+      OPENWRT:
+	for my $server (split " ", $setting{openwrt_ips})
 	{
 	    die if $server !~ /^(?:\d+\.)+\d+$/;
 
-	    print STDERR "LOOKING FOR SERVER $server...";
+	    print STDERR "LOOKING FOR OPENWRT SERVER $server...";
 
 	    my $stok = load_file("data/stok/$server");
 	    my($response);
@@ -69,7 +130,7 @@ if ($init)
 		    if (!length($response))
 		    {
 			print STDERR "NO SERVER";
-			next SERVER;
+			next OPENWRT;
 		    }
 		    last if $response !~ /name="password"/;
 		}
@@ -86,13 +147,13 @@ if ($init)
 		if (!length($response))
 		{
 		    print STDERR "NO SERVER";
-		    next SERVER;
+		    next OPENWRT;
 		}
 
 		if ($response =~ /name="password"/)
 		{
 		    print STDERR "NO ACCESS";
-		    next SERVER;
+		    next OPENWRT;
 		}
 	    }
 
@@ -140,10 +201,12 @@ if ($init)
 		{
 		    push @curl, "-F", "'$F[$i]=$F[$i + 1]'";
 		}
-		my $curl = qq[curl -s -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/system/admin/' @curl];
+		my $curl = qq[curl -s --max-time 10 -b data/cookie/$server '$server/cgi-bin/luci/;stok=$stok/admin/system/admin/' @curl];
 		print STDERR "\n$curl\n" if $verbose;
 		my $response = qx[$curl];
 		save_file("data/work2.html", $response);
+
+		sleep 2;
 
 
 		# CONFIG BY SSH
@@ -155,12 +218,16 @@ uci set network.lan.gateway=$setting{gateway}
 uci set network.lan.broadcast=$setting{broadcast}
 uci set network.lan.dns=$setting{dns}
 uci commit
-reboot
+sync
+reboot -f
 ";
 
-		my $ssh = qq[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
+		print STDERR "STEP 2...";
+
+		my $ssh = qq[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>data/ssh.txt];
 		print "$ssh\n" if $verbose;
-		my $response = qx[$ssh];
+		my $response = qx[timeout 5 $ssh];
+		#print "$response\n";
 		print STDERR "REBOOTING\n";
 	    }
 	}
@@ -178,7 +245,7 @@ reboot
 	}
 
 	last if !$loop;
-	sleep 3;
+	sleep 1;
     }
 
     exit;
