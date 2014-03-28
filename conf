@@ -11,11 +11,20 @@ if ($settings)
 }
 
 
+if ($save)
+{
+    my %inventory = load_inventory();
+    save_inventory(\%inventory);
+}
+
+
 if ($show)
 {
     my %inventory = load_inventory();
-    use Data::Dumper;
-    print Dumper(\%inventory);
+    for (sort xcmp keys %inventory)
+    {
+	print join("\t", @{$inventory{$_}}{qw(ip password mac)}), "\n";
+    }
     exit;
 }
 
@@ -43,8 +52,6 @@ if ($flash)
 {
     for (;;)
     {
-	my %inventory = load_inventory();
-
       FACTORY:
 	for my $server (split " ", $setting{factory_ips})
 	{
@@ -168,7 +175,7 @@ if ($init)
 	    else
 	    {
 		my($ip);
-		for my $ip0 (sort keys %inventory)
+		for my $ip0 (sort xcmp keys %inventory)
 		{
 		    if ($inventory{$ip0}{mac} eq $mac)
 		    {
@@ -217,17 +224,40 @@ uci set network.lan.ipaddr=$ip
 uci set network.lan.gateway=$setting{gateway}
 uci set network.lan.broadcast=$setting{broadcast}
 uci set network.lan.dns=$setting{dns}
+
+uci set cgminer.default.pool1url=stratum.btcguild.com:3333
+uci set cgminer.default.pool1user=btcguilder2022_2
+uci set cgminer.default.pool1pw=123
+uci set cgminer.default.pool2url=
+uci set cgminer.default.pool2user=
+uci set cgminer.default.pool2pw=
+uci set cgminer.default.pool3url=
+uci set cgminer.default.pool3user=
+uci set cgminer.default.pool3pw=
+uci set cgminer.default.asic=55
+uci set cgminer.default.chip_frequency=1400
+uci set cgminer.default.miner_count=16
+uci set cgminer.default.api_allow=W:127.0.0.1
+uci set cgminer.default.pool_balance=
+uci set cgminer.default.more_options=--quiet
+uci set cgminer.default.target=45
+uci set cgminer.default.overheat=60
+
 uci commit
 sync
+uci show network.lan
 reboot -f
 ";
 
 		print STDERR "STEP 2...";
 
-		my $ssh = qq[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>data/ssh.txt];
+		my $ssh = qq[ssh root\@$server -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -n '$do' 2>/dev/null];
 		print "$ssh\n" if $verbose;
+		$SIG{ALRM} = sub {die "\nTIMEOUT - did you run ssh-agent + ssh-add ?\n";};
+		alarm 6;
 		my $response = qx[timeout 5 $ssh];
-		#print "$response\n";
+		alarm 0;
+		print "\n$response\n";
 		print STDERR "REBOOTING\n";
 	    }
 	}
@@ -258,6 +288,7 @@ sub save_inventory
     my(@inventory);
     for (values %$ref)
     {
+	next if !$_->{ip};
 	push @inventory, join("\t", @$_{qw(ip password mac)});
     }
     save_file("inventory.txt", join("\n", sort(@inventory), undef));
@@ -320,4 +351,32 @@ sub save_file
 	    print $out @_;
 	}
     }
+}
+
+sub xcmp
+{
+    #my($a, $b) = @_? @_: ($a, $b);
+
+    my @a = split(//, $a);
+    my @b = split(//, $b);
+
+    for (;;)
+    {
+        return @a - @b unless @a && @b;
+
+        last if $a[0] cmp $b[0];
+
+        shift @a;
+        shift @b;
+    }
+
+    my $cmp = $a[0] cmp $b[0];
+
+    for (;;)
+    {
+        return ($a[0] =~ /\d/) - ($b[0] =~ /\d/) if ($a[0] =~ /\d/) - ($b[0] =~ /\d/);
+        last unless (shift @a) =~ /\d/ && (shift @b) =~ /\d/;
+    }
+
+    return $cmp;
 }
